@@ -365,6 +365,15 @@ export async function POST(req: Request) {
                     name: fc.name,
                     response: { result: resultText }
                   });
+                  
+                  if (action !== "screenshot") {
+                    const actionScreenshot = await desktop.screenshot();
+                    const actionScreenshotBase64 = Buffer.from(actionScreenshot).toString('base64');
+                    sendEvent({
+                      type: "screenshot-update",
+                      screenshot: actionScreenshotBase64
+                    });
+                  }
                 } else if (fc.name === "bash_command") {
                   const result = await desktop.commands.run(args.command);
                   const output = result.stdout || result.stderr || "(Command executed successfully with no output)";
@@ -378,6 +387,13 @@ export async function POST(req: Request) {
                   functionResponses.push({
                     name: fc.name,
                     response: { result: output }
+                  });
+                  
+                  const bashScreenshot = await desktop.screenshot();
+                  const bashScreenshotBase64 = Buffer.from(bashScreenshot).toString('base64');
+                  sendEvent({
+                    type: "screenshot-update",
+                    screenshot: bashScreenshotBase64
                   });
                 }
               } catch (error) {
