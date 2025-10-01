@@ -15,7 +15,7 @@ DOSTĘPNE NARZĘDZIA:
 - computer_use: Kontrola desktopa (screenshot, klikanie, pisanie, przewijanie, przeciąganie)
 
 ZASADY UŻYWANIA NARZĘDZI:
-- Używaj OBIE narzędzia w zależności od potrzeb
+- Używaj przedewszystkim narzędzia computer_use, staraj się nie użwywać bash dopóki nie będzie to konieczne.
 - bash_command: dla operacji terminalowych (mkdir, touch, apt install, python, itp.)
 - computer_use: dla interakcji GUI (otwieranie aplikacji, klikanie w przeglądarce, itp.)
 - Jeśli przeglądarka otworzy się z kreatorem konfiguracji, ZIGNORUJ GO i przejdź do następnego kroku
