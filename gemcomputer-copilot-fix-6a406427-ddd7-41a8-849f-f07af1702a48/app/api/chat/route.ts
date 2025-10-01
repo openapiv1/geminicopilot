@@ -62,9 +62,9 @@ type ToolDeclaration = {
   };
 };
 
-const GEMINI_API_KEY = "AIzaSyA_8oLS-4FgJJ9-x7l5_xl1RORmJyUUKzw";
+const GEMINI_API_KEY = "AIzaSyBo8xPG6pmn1pwQ1nzLvGfvE_nXrYzBTgs";
 
-export const maxDuration = 300;
+export const maxDuration = 36000;
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
@@ -75,7 +75,7 @@ DOSTĘPNE NARZĘDZIA:
 - computer_use: Kontrola desktopa (screenshot, klikanie, pisanie, przewijanie, przeciąganie)
 
 ZASADY UŻYWANIA NARZĘDZI:
-- Używaj OBIE narzędzia w zależności od potrzeb
+- Używaj przedewszystkim narzędzia computer_use, staraj się nie użwywać bash dopóki nie będzie to konieczne.
 - bash_command: dla operacji terminalowych (mkdir, touch, apt install, python, itp.)
 - computer_use: dla interakcji GUI (otwieranie aplikacji, klikanie w przeglądarce, itp.)
 - Jeśli przeglądarka otworzy się z kreatorem konfiguracji, ZIGNORUJ GO i przejdź do następnego kroku
@@ -227,6 +227,7 @@ export async function POST(req: Request) {
           const functionCalls: ToolCallRecord[] = [];
           const functionResponses: ToolResponseRecord[] = [];
           let toolCallIndex = 0;
+          const toolExecutionPromises: Promise<void>[] = [];
 
           for await (const chunk of result.stream) {
             const candidate = chunk.candidates?.[0];
@@ -294,8 +295,13 @@ export async function POST(req: Request) {
                   name: fc.name,
                   args: parsedArgs
                 });
+ codex/revamp-chat-component-for-live-streaming-qepge9
 
                 (async () => {
+
+                
+                const toolPromise = (async () => {
+ main
                   try {
                     const args = parsedArgs as ComputerUseArgs & BashCommandArgs;
                     let resultData: ToolOutputPayload = { type: "text", text: "" };
@@ -486,11 +492,14 @@ export async function POST(req: Request) {
                     });
                   }
                 })();
+                
+                toolExecutionPromises.push(toolPromise);
               }
             }
           }
           
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for all tool executions to complete before continuing
+          await Promise.all(toolExecutionPromises);
           
           if (functionCalls.length > 0) {
             const newScreenshot = await desktop.screenshot();

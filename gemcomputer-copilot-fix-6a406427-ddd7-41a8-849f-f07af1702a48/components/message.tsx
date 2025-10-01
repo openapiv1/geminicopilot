@@ -17,6 +17,7 @@ import {
   StopCircle,
 } from "lucide-react";
 
+ codex/revamp-chat-component-for-live-streaming-qepge9
 type TextPart = { type: "text"; text: string };
 
 type ScreenshotUpdatePart = {
@@ -52,11 +53,30 @@ type ToolInvocationPart = {
   };
 };
 
+
+ main
 export type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
+ codex/revamp-chat-component-for-live-streaming-qepge9
   parts?: Array<TextPart | ToolInvocationPart | ScreenshotUpdatePart>;
+
+  parts?: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "tool-invocation";
+        toolInvocation: {
+          toolCallId: string;
+          toolName?: string;
+          state: "streaming" | "call" | "result";
+          args?: Record<string, any>;
+          argsText?: string;
+          result?: any;
+        };
+      }
+  >;
+ main
 };
 
 type PreviewMessageProps = {
@@ -94,7 +114,11 @@ function formatCoordinate(value?: number[]) {
   return `(${value[0]}, ${value[1]})`;
 }
 
+ codex/revamp-chat-component-for-live-streaming-qepge9
 function describeComputerAction(part: ToolInvocationPart): ComputerActionDescriptor {
+
+function describeComputerAction(part: Message["parts"][number] & { type: "tool-invocation" }): ComputerActionDescriptor {
+ main
   const { args = {}, argsText, state } = part.toolInvocation;
   const action: string | undefined = args?.action;
 
@@ -193,7 +217,11 @@ function renderInvocationStatus(
   state: "streaming" | "call" | "result",
   isLatestMessage: boolean,
   chatStatus: PreviewMessageProps["status"],
+ codex/revamp-chat-component-for-live-streaming-qepge9
   result?: ToolInvocationResult,
+
+  result?: any,
+ main
 ) {
   if (state === "streaming") {
     return streamingSpinner;
@@ -204,12 +232,16 @@ function renderInvocationStatus(
   }
 
   if (state === "result") {
+ codex/revamp-chat-component-for-live-streaming-qepge9
     const statusValue =
       result && typeof result === "object" && "status" in result
         ? (result as { status?: string }).status
         : undefined;
 
     if (result === ABORTED || statusValue === "aborted" || statusValue === "blocked") {
+
+    if (result === ABORTED || result?.status === "aborted") {
+ main
       return abortedIcon;
     }
     return completedIcon;
@@ -223,7 +255,11 @@ function ComputerInvocation({
   isLatestMessage,
   status,
 }: {
+ codex/revamp-chat-component-for-live-streaming-qepge9
   part: ToolInvocationPart;
+
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
+ main
   isLatestMessage: boolean;
   status: PreviewMessageProps["status"];
 }) {
@@ -273,7 +309,11 @@ function BashInvocation({
   isLatestMessage,
   status,
 }: {
+ codex/revamp-chat-component-for-live-streaming-qepge9
   part: ToolInvocationPart;
+
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
+ main
   isLatestMessage: boolean;
   status: PreviewMessageProps["status"];
 }) {
@@ -310,7 +350,11 @@ function GenericInvocation({
   isLatestMessage,
   status,
 }: {
+ codex/revamp-chat-component-for-live-streaming-qepge9
   part: ToolInvocationPart;
+
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
+ main
   isLatestMessage: boolean;
   status: PreviewMessageProps["status"];
 }) {
@@ -330,7 +374,11 @@ function GenericInvocation({
   );
 }
 
+ codex/revamp-chat-component-for-live-streaming-qepge9
 function renderToolInvocation(part: ToolInvocationPart, props: PreviewMessageProps) {
+
+function renderToolInvocation(part: Extract<Message["parts"][number], { type: "tool-invocation" }>, props: PreviewMessageProps) {
+ main
   const toolName = part.toolInvocation.toolName;
 
   if (toolName === "computer" || (!toolName && part.toolInvocation.args?.action)) {
@@ -380,6 +428,7 @@ export function PreviewMessage(props: PreviewMessageProps) {
               return (
                 <div key={`${message.id}-text-${index}`} className="max-w-prose">
                   <Markdown>{part.text}</Markdown>
+ codex/revamp-chat-component-for-live-streaming-qepge9
                 </div>
               );
             }
@@ -412,10 +461,23 @@ export function PreviewMessage(props: PreviewMessageProps) {
                     alt="Live desktop screenshot"
                     className="aspect-[1024/768] w-full rounded-sm object-cover"
                   />
+
+ main
                 </div>
               );
             }
 
+ codex/revamp-chat-component-for-live-streaming-qepge9
+
+            if (part.type === "tool-invocation") {
+              return (
+                <div key={`${message.id}-tool-${part.toolInvocation.toolCallId}-${index}`}>
+                  {renderToolInvocation(part, props)}
+                </div>
+              );
+            }
+
+ main
             return null;
           })}
         </div>
