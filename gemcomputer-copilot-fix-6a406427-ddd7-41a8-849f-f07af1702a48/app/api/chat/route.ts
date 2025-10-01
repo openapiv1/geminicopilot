@@ -4,7 +4,7 @@ import { resolution } from "@/lib/e2b/tool";
 
 const GEMINI_API_KEY = "AIzaSyA_8oLS-4FgJJ9-x7l5_xl1RORmJyUUKzw";
 
-export const maxDuration = 300;
+export const maxDuration = 36000;
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
