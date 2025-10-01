@@ -22,14 +22,22 @@ args = "Server"
 name = "Server"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd gemcomputer-copilot-fix-6a406427-ddd7-41a8-849f-f07af1702a48 && npm run dev -- -p 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd gemcomputer-copilot-fix-6a406427-ddd7-41a8-849f-f07af1702a48 && npm run dev"
+waitForPort = 5000
+
+[[ports]]
+localPort = 3000
+externalPort = 3000
 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 36731
+externalPort = 3001

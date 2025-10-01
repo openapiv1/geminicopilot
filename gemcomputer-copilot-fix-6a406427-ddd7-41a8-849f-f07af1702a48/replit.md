@@ -6,6 +6,12 @@ This is an AI-powered computer control application that allows users to interact
 
 ## Recent Changes
 
+**2025-10-01**: Ulepszone instrukcje systemowe dla automatycznych zrzutów ekranu
+- AI będzie automatycznie robił zrzuty ekranu co 2-3 akcje
+- Jasne instrukcje o używaniu OBIE narzędzi (bash_command i computer_use)
+- Dodane workflow z automatycznym sprawdzaniem stanu sandboxa
+- Zmieniony port serwera na 5000 (zgodnie z polityką Replit)
+
 **2025-09-30**: Enhanced Gemini sandbox control implementation
 - Improved screenshot action to send screenshot-update events for immediate UI updates
 - Enhanced bash_command to capture both stdout and stderr for better error visibility
