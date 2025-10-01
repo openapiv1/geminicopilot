@@ -166,6 +166,7 @@ export async function POST(req: Request) {
           let functionCalls: any[] = [];
           let functionResponses: any[] = [];
           let toolCallIndex = 0;
+          const toolExecutionPromises: Promise<void>[] = [];
 
           for await (const chunk of result.stream) {
             const candidate = chunk.candidates?.[0];
@@ -233,7 +234,7 @@ export async function POST(req: Request) {
                   args: parsedArgs
                 });
                 
-                (async () => {
+                const toolPromise = (async () => {
                   try {
                     const args = parsedArgs as any;
                     let resultData: any = { type: "text", text: "" };
@@ -383,11 +384,14 @@ export async function POST(req: Request) {
                     });
                   }
                 })();
+                
+                toolExecutionPromises.push(toolPromise);
               }
             }
           }
           
-          await new Promise(resolve => setTimeout(resolve, 500));
+          // Wait for all tool executions to complete before continuing
+          await Promise.all(toolExecutionPromises);
           
           if (functionCalls.length > 0) {
             const newScreenshot = await desktop.screenshot();
