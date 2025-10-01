@@ -56,31 +56,47 @@ export default function Chat() {
   const stop = () => {
     stopGeneration();
 
-    const lastMessage = messages.at(-1);
-    const lastMessageLastPart = lastMessage?.parts?.at(-1);
-    if (
-      lastMessage?.role === "assistant" &&
-      lastMessage?.parts &&
-      lastMessageLastPart?.type === "tool-invocation"
-    ) {
-      const messageParts = lastMessage.parts;
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        {
-          ...lastMessage,
-          parts: [
-            ...messageParts.slice(0, -1),
-            {
-              ...lastMessageLastPart,
-              toolInvocation: {
-                ...lastMessageLastPart.toolInvocation,
-                state: "result",
-                result: ABORTED,
-              },
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message?.role !== "assistant" || !message?.parts?.length) {
+        continue;
+      }
+
+      for (let j = message.parts.length - 1; j >= 0; j -= 1) {
+        const part = message.parts[j];
+        if (part?.type !== "tool-invocation") continue;
+        if (part.toolInvocation.state === "result") continue;
+
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const messageToUpdate = newMessages[i];
+          if (!messageToUpdate?.parts) return prev;
+
+          const updatedParts = [...messageToUpdate.parts];
+          const targetPart = updatedParts[j];
+          if (!targetPart || targetPart.type !== "tool-invocation") {
+            return prev;
+          }
+
+          updatedParts[j] = {
+            ...targetPart,
+            toolInvocation: {
+              ...targetPart.toolInvocation,
+              state: "result",
+              result: ABORTED,
             },
-          ],
-        },
-      ]);
+          };
+
+          newMessages[i] = {
+            ...messageToUpdate,
+            parts: updatedParts,
+          };
+
+          return newMessages;
+        });
+
+        return;
+      }
     }
   };
 
