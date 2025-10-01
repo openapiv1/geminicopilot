@@ -2,6 +2,66 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { killDesktop, getDesktop } from "@/lib/e2b/utils";
 import { resolution } from "@/lib/e2b/tool";
 
+type IncomingChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type ChatInlineData = {
+  mimeType: string;
+  data: string;
+};
+
+type GenerativePart =
+  | { text: string }
+  | { inlineData: ChatInlineData }
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
+
+type GenerativeMessage = {
+  role: "user" | "model";
+  parts: GenerativePart[];
+};
+
+type ToolCallRecord = {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+
+type ToolResponseRecord = {
+  name: string;
+  response: Record<string, unknown>;
+};
+
+type ToolOutputPayload =
+  | { type: "text"; text: string; status?: string }
+  | { type: "image"; data: string; resolution: { width: number; height: number } };
+
+type ComputerUseArgs = {
+  action?: string;
+  coordinate?: [number, number];
+  start_coordinate?: [number, number];
+  text?: string;
+  duration?: number;
+  scroll_direction?: "up" | "down";
+  scroll_amount?: number;
+};
+
+type BashCommandArgs = {
+  command?: string;
+};
+
+type ToolDeclaration = {
+  name: string;
+  description: string;
+  parameters: {
+    type: SchemaType;
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+};
+
 const GEMINI_API_KEY = "AIzaSyA_8oLS-4FgJJ9-x7l5_xl1RORmJyUUKzw";
 
 export const maxDuration = 300;
@@ -41,7 +101,7 @@ WORKFLOW:
 4. Po 2-3 akcjach zrób screenshot (computer_use) aby sprawdzić stan
 5. Przeanalizuj nowy screenshot i kontynuuj lub zakończ zadanie`;
 
-const tools = [
+const tools: ToolDeclaration[] = [
   {
     name: "computer_use",
     description: "Use the computer to perform actions like clicking, typing, taking screenshots, etc.",
@@ -99,34 +159,36 @@ const tools = [
 ];
 
 export async function POST(req: Request) {
-  const { messages, sandboxId }: { messages: any[]; sandboxId: string } = await req.json();
-  
+  const { messages, sandboxId }: { messages: IncomingChatMessage[]; sandboxId: string } = await req.json();
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const sendEvent = (data: any) => {
+      const sendEvent = (data: Record<string, unknown>) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
       try {
         const desktop = await getDesktop(sandboxId);
-        
+        let agentHasTakenInitialScreenshot = false;
+
         const screenshot = await desktop.screenshot();
         const screenshotBase64 = Buffer.from(screenshot).toString('base64');
-        
+
         sendEvent({
           type: "screenshot-update",
-          screenshot: screenshotBase64
+          screenshot: screenshotBase64,
+          resolution: { width: resolution.x, height: resolution.y }
         });
         
         const model = genAI.getGenerativeModel({
           model: "gemini-2.5-flash",
           systemInstruction: INSTRUCTIONS,
-          tools: [{ functionDeclarations: tools as any }]
+          tools: [{ functionDeclarations: tools }]
         });
 
-        const chatHistory: any[] = [];
-        
+        const chatHistory: GenerativeMessage[] = [];
+
         for (const msg of messages) {
           if (msg.role === "user") {
             chatHistory.push({
@@ -162,9 +224,8 @@ export async function POST(req: Request) {
           const lastMessage = chatHistory[chatHistory.length - 1];
           const result = await chat.sendMessageStream(lastMessage.parts);
 
-          let fullText = "";
-          let functionCalls: any[] = [];
-          let functionResponses: any[] = [];
+          const functionCalls: ToolCallRecord[] = [];
+          const functionResponses: ToolResponseRecord[] = [];
           let toolCallIndex = 0;
 
           for await (const chunk of result.stream) {
@@ -176,7 +237,6 @@ export async function POST(req: Request) {
 
             for (const part of content.parts) {
               if (part.text) {
-                fullText += part.text;
                 sendEvent({ type: "text-delta", delta: part.text, id: "default" });
               }
 
@@ -186,17 +246,19 @@ export async function POST(req: Request) {
                 const toolName = fc.name === "computer_use" ? "computer" : "bash";
                 const currentIndex = toolCallIndex;
                 toolCallIndex++;
-                
-                let parsedArgs = fc.args || {};
-                if (typeof fc.args === 'string') {
+
+                let parsedArgs: Record<string, unknown> = {};
+                if (typeof fc.args === "string") {
                   try {
-                    parsedArgs = JSON.parse(fc.args);
-                  } catch (e) {
+                    parsedArgs = JSON.parse(fc.args) as Record<string, unknown>;
+                  } catch {
                     console.error("Failed to parse function args:", fc.args);
                     parsedArgs = {};
                   }
+                } else if (fc.args && typeof fc.args === "object") {
+                  parsedArgs = fc.args as Record<string, unknown>;
                 }
-                
+
                 sendEvent({
                   type: "tool-call-start",
                   toolCallId: toolCallId,
@@ -232,26 +294,52 @@ export async function POST(req: Request) {
                   name: fc.name,
                   args: parsedArgs
                 });
-                
+
                 (async () => {
                   try {
-                    const args = parsedArgs as any;
-                    let resultData: any = { type: "text", text: "" };
+                    const args = parsedArgs as ComputerUseArgs & BashCommandArgs;
+                    let resultData: ToolOutputPayload = { type: "text", text: "" };
                     let resultText = "";
 
                     if (fc.name === "computer_use") {
                       const action = args.action;
 
+                      if (!agentHasTakenInitialScreenshot) {
+                        if (action !== "screenshot") {
+                          const requirementText = `First computer action must be a screenshot at resolution ${resolution.x}x${resolution.y}. Please perform a screenshot before continuing.`;
+
+                          sendEvent({
+                            type: "tool-output-available",
+                            toolCallId: toolCallId,
+                            output: { type: "text", text: requirementText, status: "blocked" }
+                          });
+
+                          functionResponses.push({
+                            name: fc.name,
+                            response: { error: requirementText }
+                          });
+
+                          return;
+                        }
+
+                        agentHasTakenInitialScreenshot = true;
+                      }
+
                       switch (action) {
                         case "screenshot": {
                           const image = await desktop.screenshot();
                           const base64Data = Buffer.from(image).toString("base64");
-                          resultText = "Screenshot taken successfully";
-                          resultData = { type: "image", data: base64Data };
-                          
+                          resultText = `Screenshot taken successfully at ${resolution.x}x${resolution.y}`;
+                          resultData = {
+                            type: "image",
+                            data: base64Data,
+                            resolution: { width: resolution.x, height: resolution.y }
+                          };
+
                           sendEvent({
                             type: "screenshot-update",
-                            screenshot: base64Data
+                            screenshot: base64Data,
+                            resolution: { width: resolution.x, height: resolution.y }
                           });
                           break;
                         }
@@ -263,7 +351,8 @@ export async function POST(req: Request) {
                           break;
                         }
                         case "left_click": {
-                          const [x, y] = args.coordinate;
+                          const coordinate = args.coordinate ?? [0, 0];
+                          const [x, y] = coordinate;
                           await desktop.moveMouse(x, y);
                           await desktop.leftClick();
                           resultText = `Left clicked at ${x}, ${y}`;
@@ -271,7 +360,8 @@ export async function POST(req: Request) {
                           break;
                         }
                         case "double_click": {
-                          const [x, y] = args.coordinate;
+                          const coordinate = args.coordinate ?? [0, 0];
+                          const [x, y] = coordinate;
                           await desktop.moveMouse(x, y);
                           await desktop.doubleClick();
                           resultText = `Double clicked at ${x}, ${y}`;
@@ -279,7 +369,8 @@ export async function POST(req: Request) {
                           break;
                         }
                         case "right_click": {
-                          const [x, y] = args.coordinate;
+                          const coordinate = args.coordinate ?? [0, 0];
+                          const [x, y] = coordinate;
                           await desktop.moveMouse(x, y);
                           await desktop.rightClick();
                           resultText = `Right clicked at ${x}, ${y}`;
@@ -287,36 +378,41 @@ export async function POST(req: Request) {
                           break;
                         }
                         case "mouse_move": {
-                          const [x, y] = args.coordinate;
+                          const coordinate = args.coordinate ?? [0, 0];
+                          const [x, y] = coordinate;
                           await desktop.moveMouse(x, y);
                           resultText = `Moved mouse to ${x}, ${y}`;
                           resultData = { type: "text", text: resultText };
                           break;
                         }
                         case "type": {
-                          await desktop.write(args.text);
-                          resultText = `Typed: ${args.text}`;
+                          const textToType = args.text ?? "";
+                          await desktop.write(textToType);
+                          resultText = `Typed: ${textToType}`;
                           resultData = { type: "text", text: resultText };
                           break;
                         }
                         case "key": {
-                          const keyToPress = args.text === "Return" ? "enter" : args.text;
+                          const keyValue = args.text ?? "";
+                          const keyToPress = keyValue === "Return" ? "enter" : keyValue;
                           await desktop.press(keyToPress);
-                          resultText = `Pressed key: ${args.text}`;
+                          resultText = `Pressed key: ${keyValue}`;
                           resultData = { type: "text", text: resultText };
                           break;
                         }
                         case "scroll": {
-                          const direction = args.scroll_direction as "up" | "down";
-                          const amount = args.scroll_amount || 3;
+                          const direction = (args.scroll_direction ?? "down") as "up" | "down";
+                          const amount = args.scroll_amount ?? 3;
                           await desktop.scroll(direction, amount);
                           resultText = `Scrolled ${direction} by ${amount} clicks`;
                           resultData = { type: "text", text: resultText };
                           break;
                         }
                         case "left_click_drag": {
-                          const [startX, startY] = args.start_coordinate;
-                          const [endX, endY] = args.coordinate;
+                          const start = args.start_coordinate ?? [0, 0];
+                          const end = args.coordinate ?? [0, 0];
+                          const [startX, startY] = start;
+                          const [endX, endY] = end;
                           await desktop.drag([startX, startY], [endX, endY]);
                           resultText = `Dragged from (${startX}, ${startY}) to (${endX}, ${endY})`;
                           resultData = { type: "text", text: resultText };
@@ -345,13 +441,19 @@ export async function POST(req: Request) {
                         const actionScreenshotBase64 = Buffer.from(actionScreenshot).toString('base64');
                         sendEvent({
                           type: "screenshot-update",
-                          screenshot: actionScreenshotBase64
+                          screenshot: actionScreenshotBase64,
+                          resolution: { width: resolution.x, height: resolution.y }
                         });
                       }
                     } else if (fc.name === "bash_command") {
-                      const result = await desktop.commands.run(args.command);
+                      const command = args.command;
+                      if (!command) {
+                        throw new Error("Missing command for bash_command tool invocation");
+                      }
+
+                      const result = await desktop.commands.run(command);
                       const output = result.stdout || result.stderr || "(Command executed successfully with no output)";
-                      
+
                       sendEvent({
                         type: "tool-output-available",
                         toolCallId: toolCallId,
@@ -367,7 +469,8 @@ export async function POST(req: Request) {
                       const bashScreenshotBase64 = Buffer.from(bashScreenshot).toString('base64');
                       sendEvent({
                         type: "screenshot-update",
-                        screenshot: bashScreenshotBase64
+                        screenshot: bashScreenshotBase64,
+                        resolution: { width: resolution.x, height: resolution.y }
                       });
                     }
                   } catch (error) {
@@ -392,10 +495,11 @@ export async function POST(req: Request) {
           if (functionCalls.length > 0) {
             const newScreenshot = await desktop.screenshot();
             const newScreenshotBase64 = Buffer.from(newScreenshot).toString('base64');
-            
+
             sendEvent({
               type: "screenshot-update",
-              screenshot: newScreenshotBase64
+              screenshot: newScreenshotBase64,
+              resolution: { width: resolution.x, height: resolution.y }
             });
 
             chatHistory.push({
@@ -430,8 +534,6 @@ export async function POST(req: Request) {
                 }
               ]
             });
-
-            functionCalls = [];
           } else {
             controller.close();
             return;
