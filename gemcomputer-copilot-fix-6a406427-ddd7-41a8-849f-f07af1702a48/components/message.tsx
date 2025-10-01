@@ -1,18 +1,8 @@
 "use client";
 
-import { AnimatePresence, motion } from "motion/react";
-import { memo } from "react";
-import equal from "fast-deep-equal";
-
+import type { ComponentType } from "react";
 import { Markdown } from "./markdown";
 import { ABORTED, cn } from "@/lib/utils";
-
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  parts?: any[];
-};
 import {
   Camera,
   CheckCircle,
@@ -27,378 +17,358 @@ import {
   StopCircle,
 } from "lucide-react";
 
-const PurePreviewMessage = ({
-  message,
+export type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  parts?: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "tool-invocation";
+        toolInvocation: {
+          toolCallId: string;
+          toolName?: string;
+          state: "streaming" | "call" | "result";
+          args?: Record<string, any>;
+          argsText?: string;
+          result?: any;
+        };
+      }
+  >;
+};
+
+type PreviewMessageProps = {
+  message: Message;
+  status: "error" | "submitted" | "streaming" | "ready";
+  isLatestMessage: boolean;
+  isLoading: boolean;
+};
+
+type ComputerActionDescriptor = {
+  label: string;
+  detail?: string;
+  icon: ComponentType<{ className?: string }> | null;
+  showSkeleton?: boolean;
+};
+
+const streamingSpinner = (
+  <Loader2 className="h-4 w-4 animate-spin text-blue-500" aria-hidden="true" />
+);
+
+const idleSpinner = (
+  <Loader2 className="h-4 w-4 animate-spin text-zinc-500" aria-hidden="true" />
+);
+
+const abortedIcon = (
+  <CircleSlash className="h-4 w-4 text-amber-600" aria-hidden="true" />
+);
+
+const completedIcon = (
+  <CheckCircle className="h-4 w-4 text-green-600" aria-hidden="true" />
+);
+
+function formatCoordinate(value?: number[]) {
+  if (!value || value.length < 2) return undefined;
+  return `(${value[0]}, ${value[1]})`;
+}
+
+function describeComputerAction(part: Message["parts"][number] & { type: "tool-invocation" }): ComputerActionDescriptor {
+  const { args = {}, argsText, state } = part.toolInvocation;
+  const action: string | undefined = args?.action;
+
+  if (!action && state === "streaming") {
+    if (argsText) {
+      return {
+        label: "Analyzing action",
+        detail: argsText.slice(0, 50),
+        icon: Loader2,
+      };
+    }
+    return {
+      label: "Preparing action",
+      icon: Loader2,
+      showSkeleton: false,
+    };
+  }
+
+  switch (action) {
+    case "screenshot":
+      return { label: "Taking screenshot", icon: Camera, showSkeleton: state !== "result" };
+    case "left_click":
+      return {
+        label: "Left click",
+        detail: formatCoordinate(args?.coordinate) ?? (argsText ? "(streaming...)" : undefined),
+        icon: MousePointer,
+      };
+    case "right_click":
+      return {
+        label: "Right click",
+        detail: formatCoordinate(args?.coordinate) ?? (argsText ? "(streaming...)" : undefined),
+        icon: MousePointerClick,
+      };
+    case "double_click":
+      return {
+        label: "Double click",
+        detail: formatCoordinate(args?.coordinate) ?? (argsText ? "(streaming...)" : undefined),
+        icon: MousePointerClick,
+      };
+    case "mouse_move":
+      return {
+        label: "Move mouse",
+        detail: formatCoordinate(args?.coordinate) ?? (argsText ? "(streaming...)" : undefined),
+        icon: MousePointer,
+      };
+    case "type":
+      return {
+        label: "Typing",
+        detail: args?.text ? `"${args.text}"` : argsText ? "(streaming...)" : undefined,
+        icon: Keyboard,
+      };
+    case "key":
+      return {
+        label: "Pressing key",
+        detail: args?.text ? `"${args.text}"` : argsText ? "(streaming...)" : undefined,
+        icon: KeyRound,
+      };
+    case "wait":
+      return {
+        label: "Waiting",
+        detail: args?.duration ? `${args.duration} seconds` : argsText ? "(streaming...)" : undefined,
+        icon: Clock,
+      };
+    case "scroll":
+      return {
+        label: "Scrolling",
+        detail:
+          args?.scroll_direction && args?.scroll_amount
+            ? `${args.scroll_direction} by ${args.scroll_amount}`
+            : argsText
+              ? "(streaming...)"
+              : undefined,
+        icon: ScrollText,
+      };
+    case "left_click_drag":
+      return {
+        label: "Dragging",
+        detail:
+          args?.start_coordinate && args?.coordinate
+            ? `${formatCoordinate(args.start_coordinate)} → ${formatCoordinate(args.coordinate)}`
+            : argsText
+              ? "(streaming...)"
+              : undefined,
+        icon: MousePointer,
+      };
+    default:
+      return {
+        label: action ?? "Computer action",
+        detail: argsText ? argsText.slice(0, 60) : undefined,
+        icon: Loader2,
+      };
+  }
+}
+
+function renderInvocationStatus(
+  state: "streaming" | "call" | "result",
+  isLatestMessage: boolean,
+  chatStatus: PreviewMessageProps["status"],
+  result?: any,
+) {
+  if (state === "streaming") {
+    return streamingSpinner;
+  }
+
+  if (state === "call") {
+    return isLatestMessage && chatStatus !== "ready" ? idleSpinner : <StopCircle className="h-4 w-4 text-red-500" aria-hidden="true" />;
+  }
+
+  if (state === "result") {
+    if (result === ABORTED || result?.status === "aborted") {
+      return abortedIcon;
+    }
+    return completedIcon;
+  }
+
+  return null;
+}
+
+function ComputerInvocation({
+  part,
   isLatestMessage,
   status,
 }: {
-  message: Message;
-  isLoading: boolean;
-  status: "error" | "submitted" | "streaming" | "ready";
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
   isLatestMessage: boolean;
-}) => {
+  status: PreviewMessageProps["status"];
+}) {
+  const descriptor = describeComputerAction(part);
+  const IconComponent = descriptor.icon;
+  const { state, result } = part.toolInvocation;
+
   return (
-    <AnimatePresence key={message.id}>
-      <motion.div
-        className="w-full mx-auto px-4 group/message"
-        initial={{ y: 5, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        key={`message-${message.id}`}
-        data-role={message.role}
-      >
-        <div
-          className={cn(
-            "flex gap-4 w-full group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl",
-            "group-data-[role=user]/message:w-fit",
-          )}
-        >
-          {/* {message.role === "assistant" && (
-            <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border bg-background">
-              <div className="translate-y-px">
-                <SparklesIcon size={14} />
-              </div>
-            </div>
-          )} */}
-
-          <div className="flex flex-col w-full">
-            {message.content && (
-              <motion.div
-                initial={{ y: 5, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                key={`message-${message.id}-content`}
-                className="flex flex-row gap-2 items-start w-full pb-4"
-              >
-                <div
-                  className={cn("flex flex-col gap-4", {
-                    "bg-secondary text-secondary-foreground px-3 py-2 rounded-xl":
-                      message.role === "user",
-                  })}
-                >
-                  <Markdown>{message.content}</Markdown>
-                </div>
-              </motion.div>
-            )}
-            {message.parts?.map((part, i) => {
-              switch (part.type) {
-                case "text":
-                  return (
-                    <motion.div
-                      initial={{ y: 5, opacity: 0 }}
-                      animate={{ y: 0, opacity: 1 }}
-                      key={`message-${message.id}-part-${i}`}
-                      className="flex flex-row gap-2 items-start w-full pb-4"
-                    >
-                      <div
-                        className={cn("flex flex-col gap-4", {
-                          "bg-secondary text-secondary-foreground px-3 py-2 rounded-xl":
-                            message.role === "user",
-                        })}
-                      >
-                        <Markdown>{part.text}</Markdown>
-                      </div>
-                    </motion.div>
-                  );
-                case "tool-invocation":
-                  const { toolName, toolCallId, state, args, argsText } =
-                    part.toolInvocation;
-
-                  if (toolName === "computer" || (state === "streaming" && !toolName)) {
-                    const {
-                      action,
-                      coordinate,
-                      text,
-                      duration,
-                      scroll_amount,
-                      scroll_direction,
-                    } = args;
-                    let actionLabel = "";
-                    let actionDetail = "";
-                    let ActionIcon = null;
-
-                    if (state === "streaming") {
-                      if (action) {
-                        switch (action) {
-                          case "screenshot":
-                            actionLabel = "Taking screenshot";
-                            ActionIcon = Camera;
-                            break;
-                          case "left_click":
-                            actionLabel = "Left clicking";
-                            actionDetail = coordinate
-                              ? `at (${coordinate[0]}, ${coordinate[1]})`
-                              : argsText ? `(streaming...)` : "";
-                            ActionIcon = MousePointer;
-                            break;
-                          case "right_click":
-                            actionLabel = "Right clicking";
-                            actionDetail = coordinate
-                              ? `at (${coordinate[0]}, ${coordinate[1]})`
-                              : argsText ? `(streaming...)` : "";
-                            ActionIcon = MousePointerClick;
-                            break;
-                          case "double_click":
-                            actionLabel = "Double clicking";
-                            actionDetail = coordinate
-                              ? `at (${coordinate[0]}, ${coordinate[1]})`
-                              : argsText ? `(streaming...)` : "";
-                            ActionIcon = MousePointerClick;
-                            break;
-                          case "mouse_move":
-                            actionLabel = "Moving mouse";
-                            actionDetail = coordinate
-                              ? `to (${coordinate[0]}, ${coordinate[1]})`
-                              : argsText ? `(streaming...)` : "";
-                            ActionIcon = MousePointer;
-                            break;
-                          case "type":
-                            actionLabel = "Typing";
-                            actionDetail = text ? `"${text}"` : argsText ? `(streaming...)` : "";
-                            ActionIcon = Keyboard;
-                            break;
-                          case "key":
-                            actionLabel = "Pressing key";
-                            actionDetail = text ? `"${text}"` : argsText ? `(streaming...)` : "";
-                            ActionIcon = KeyRound;
-                            break;
-                          case "wait":
-                            actionLabel = "Waiting";
-                            actionDetail = duration ? `${duration} seconds` : argsText ? `(streaming...)` : "";
-                            ActionIcon = Clock;
-                            break;
-                          case "scroll":
-                            actionLabel = "Scrolling";
-                            actionDetail =
-                              scroll_direction && scroll_amount
-                                ? `${scroll_direction} by ${scroll_amount}`
-                                : argsText ? `(streaming...)` : "";
-                            ActionIcon = ScrollText;
-                            break;
-                          case "left_click_drag":
-                            actionLabel = "Dragging";
-                            const { start_coordinate } = args;
-                            actionDetail = start_coordinate && coordinate
-                              ? `from (${start_coordinate[0]}, ${start_coordinate[1]}) to (${coordinate[0]}, ${coordinate[1]})`
-                              : argsText ? `(streaming...)` : "";
-                            ActionIcon = MousePointer;
-                            break;
-                          default:
-                            actionLabel = action;
-                            actionDetail = argsText ? argsText.slice(0, 40) : "";
-                            ActionIcon = Loader2;
-                        }
-                      } else if (argsText) {
-                        actionLabel = "Generating";
-                        actionDetail = argsText.slice(0, 50);
-                        ActionIcon = Loader2;
-                      } else {
-                        actionLabel = "Starting";
-                        ActionIcon = Loader2;
-                      }
-                    } else if (action) {
-                      switch (action) {
-                        case "screenshot":
-                          actionLabel = "Taking screenshot";
-                          ActionIcon = Camera;
-                          break;
-                        case "left_click":
-                          actionLabel = "Left clicking";
-                          actionDetail = coordinate
-                            ? `at (${coordinate[0]}, ${coordinate[1]})`
-                            : "";
-                          ActionIcon = MousePointer;
-                          break;
-                        case "right_click":
-                          actionLabel = "Right clicking";
-                          actionDetail = coordinate
-                            ? `at (${coordinate[0]}, ${coordinate[1]})`
-                            : "";
-                          ActionIcon = MousePointerClick;
-                          break;
-                        case "double_click":
-                          actionLabel = "Double clicking";
-                          actionDetail = coordinate
-                            ? `at (${coordinate[0]}, ${coordinate[1]})`
-                            : "";
-                          ActionIcon = MousePointerClick;
-                          break;
-                        case "mouse_move":
-                          actionLabel = "Moving mouse";
-                          actionDetail = coordinate
-                            ? `to (${coordinate[0]}, ${coordinate[1]})`
-                            : "";
-                          ActionIcon = MousePointer;
-                          break;
-                        case "type":
-                          actionLabel = "Typing";
-                          actionDetail = text ? `"${text}"` : "";
-                          ActionIcon = Keyboard;
-                          break;
-                        case "key":
-                          actionLabel = "Pressing key";
-                          actionDetail = text ? `"${text}"` : "";
-                          ActionIcon = KeyRound;
-                          break;
-                        case "wait":
-                          actionLabel = "Waiting";
-                          actionDetail = duration ? `${duration} seconds` : "";
-                          ActionIcon = Clock;
-                          break;
-                        case "scroll":
-                          actionLabel = "Scrolling";
-                          actionDetail =
-                            scroll_direction && scroll_amount
-                              ? `${scroll_direction} by ${scroll_amount}`
-                              : "";
-                          ActionIcon = ScrollText;
-                          break;
-                        case "left_click_drag":
-                          actionLabel = "Dragging";
-                          const { start_coordinate } = args;
-                          actionDetail = start_coordinate && coordinate
-                            ? `from (${start_coordinate[0]}, ${start_coordinate[1]}) to (${coordinate[0]}, ${coordinate[1]})`
-                            : "";
-                          ActionIcon = MousePointer;
-                          break;
-                        default:
-                          actionLabel = action;
-                          ActionIcon = MousePointer;
-                          break;
-                      }
-                    } else if (state === "streaming") {
-                      actionLabel = "Preparing action";
-                      ActionIcon = Loader2;
-                    }
-
-                    return (
-                      <motion.div
-                        initial={{ y: 5, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        key={`message-${message.id}-part-${i}`}
-                        className="flex flex-col gap-2 p-2 mb-3 text-sm bg-zinc-50 dark:bg-zinc-900 rounded-md border border-zinc-200 dark:border-zinc-800"
-                      >
-                        <div className="flex-1 flex items-center justify-center">
-                          <div className="flex items-center justify-center w-8 h-8 bg-zinc-50 dark:bg-zinc-800 rounded-full">
-                            {ActionIcon && <ActionIcon className="w-4 h-4" />}
-                          </div>
-                          <div className="flex-1">
-                            <div className="font-medium font-mono flex items-baseline gap-2">
-                              {actionLabel}
-                              {actionDetail && (
-                                <span className="text-xs text-zinc-500 dark:text-zinc-400 font-normal">
-                                  {actionDetail}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="w-5 h-5 flex items-center justify-center">
-                            {state === "streaming" ? (
-                              <Loader2 className="animate-spin h-4 w-4 text-blue-500" />
-                            ) : state === "call" ? (
-                              isLatestMessage && status !== "ready" ? (
-                                <Loader2 className="animate-spin h-4 w-4 text-zinc-500" />
-                              ) : (
-                                <StopCircle className="h-4 w-4 text-red-500" />
-                              )
-                            ) : state === "result" ? (
-                              part.toolInvocation.result === ABORTED ? (
-                                <CircleSlash
-                                size={14}
-                                className="text-amber-600"
-                                />                              ) : (
-                                <CheckCircle
-                                  size={14}
-                                  className="text-green-600"
-                                />
-                              )
-                            ) : null}
-                          </div>
-                        </div>
-                        {state === "result" ? (
-                          part.toolInvocation.result.type === "image" && (
-                            <div className="p-2">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={`data:image/png;base64,${part.toolInvocation.result.data}`}
-                                alt="Generated Image"
-                                className="w-full aspect-[1024/768] rounded-sm"
-                              />
-                            </div>
-                          )
-                        ) : action === "screenshot" ? (
-                          <div className="w-full aspect-[1024/768] rounded-sm bg-zinc-200 dark:bg-zinc-800 animate-pulse"></div>
-                        ) : null}
-                      </motion.div>
-                    );
-                  }
-                  if (toolName === "bash" || (state === "streaming" && !toolName && argsText)) {
-                    const { command } = args;
-                    const displayCommand = state === "streaming" && argsText 
-                      ? argsText.slice(0, 60)
-                      : command 
-                        ? command.slice(0, 60)
-                        : "...";
-
-                    return (
-                      <motion.div
-                        initial={{ y: 5, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        key={`message-${message.id}-part-${i}`}
-                        className="flex items-center gap-2 p-2 mb-3 text-sm bg-zinc-50 dark:bg-zinc-900 rounded-md border border-zinc-200 dark:border-zinc-800"
-                      >
-                        <div className="flex items-center justify-center w-8 h-8 bg-zinc-50 dark:bg-zinc-800 rounded-full">
-                          <ScrollText className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1">
-                          <div className="font-medium flex items-baseline gap-2">
-                            {state === "streaming" ? "Generating command" : "Running command"}
-                            <span className="text-xs text-zinc-500 dark:text-zinc-400 font-normal font-mono">
-                              {displayCommand}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="w-5 h-5 flex items-center justify-center">
-                          {state === "streaming" ? (
-                            <Loader2 className="animate-spin h-4 w-4 text-blue-500" />
-                          ) : state === "call" ? (
-                            isLatestMessage && status !== "ready" ? (
-                              <Loader2 className="animate-spin h-4 w-4 text-zinc-500" />
-                            ) : (
-                              <StopCircle className="h-4 w-4 text-red-500" />
-                            )
-                          ) : state === "result" ? (
-                            <CheckCircle size={14} className="text-green-600" />
-                          ) : null}
-                        </div>
-                      </motion.div>
-                    );
-                  }
-                  return (
-                    <div key={toolCallId}>
-                      <h3>
-                        {toolName}: {state}
-                      </h3>
-                      <pre>{JSON.stringify(args, null, 2)}</pre>
-                    </div>
-                  );
-
-                default:
-                  return null;
-              }
-            })}
+    <div className="flex flex-col gap-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800">
+          {IconComponent ? <IconComponent className="h-4 w-4" aria-hidden="true" /> : null}
+        </div>
+        <div className="flex-1">
+          <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm font-medium">
+            <span>{descriptor.label}</span>
+            {descriptor.detail ? (
+              <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">{descriptor.detail}</span>
+            ) : null}
           </div>
         </div>
-      </motion.div>
-    </AnimatePresence>
+        <div className="flex h-5 w-5 items-center justify-center">
+          {renderInvocationStatus(state, isLatestMessage, status, result)}
+        </div>
+      </div>
+
+      {state === "result" && result?.type === "image" ? (
+        <div className="overflow-hidden rounded-sm">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`data:image/png;base64,${result.data}`}
+            alt="Generated screenshot"
+            className="aspect-[1024/768] w-full object-cover"
+          />
+        </div>
+      ) : null}
+
+      {descriptor.showSkeleton ? (
+        <div className="aspect-[1024/768] w-full animate-pulse rounded-sm bg-zinc-200 dark:bg-zinc-800" />
+      ) : null}
+    </div>
   );
-};
+}
 
-export const PreviewMessage = memo(
-  PurePreviewMessage,
-  (prevProps, nextProps) => {
-    if (prevProps.status !== nextProps.status) return false;
-    if (prevProps.message.content !== nextProps.message.content) return false;
-    if (!equal(prevProps.message.parts, nextProps.message.parts)) return false;
+function BashInvocation({
+  part,
+  isLatestMessage,
+  status,
+}: {
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
+  isLatestMessage: boolean;
+  status: PreviewMessageProps["status"];
+}) {
+  const { args = {}, argsText, state, result } = part.toolInvocation;
+  const command = args?.command as string | undefined;
+  const displayCommand = argsText?.trim()?.length
+    ? argsText.trim().slice(0, 80)
+    : command
+      ? command.slice(0, 80)
+      : "...";
 
-    return true;
-  },
-);
+  const statusIcon = renderInvocationStatus(state, isLatestMessage, status, result);
+
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800">
+        <ScrollText className="h-4 w-4" aria-hidden="true" />
+      </div>
+      <div className="flex-1">
+        <div className="flex flex-col">
+          <span className="font-mono text-sm font-medium">
+            {state === "streaming" ? "Generating command" : "Running command"}
+          </span>
+          <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">{displayCommand}</span>
+        </div>
+      </div>
+      <div className="flex h-5 w-5 items-center justify-center">{statusIcon}</div>
+    </div>
+  );
+}
+
+function GenericInvocation({
+  part,
+  isLatestMessage,
+  status,
+}: {
+  part: Extract<Message["parts"][number], { type: "tool-invocation" }>;
+  isLatestMessage: boolean;
+  status: PreviewMessageProps["status"];
+}) {
+  const { toolName = "tool", state, args, result } = part.toolInvocation;
+  const statusIcon = renderInvocationStatus(state, isLatestMessage, status, result);
+
+  return (
+    <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-center gap-3">
+        <div className="font-mono text-xs uppercase text-zinc-500">{toolName}</div>
+        <div className="ml-auto flex h-5 w-5 items-center justify-center">{statusIcon}</div>
+      </div>
+      <pre className="mt-2 overflow-x-auto rounded bg-zinc-900/5 p-3 text-xs text-zinc-700 dark:bg-white/5 dark:text-zinc-200">
+        {JSON.stringify(args, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+function renderToolInvocation(part: Extract<Message["parts"][number], { type: "tool-invocation" }>, props: PreviewMessageProps) {
+  const toolName = part.toolInvocation.toolName;
+
+  if (toolName === "computer" || (!toolName && part.toolInvocation.args?.action)) {
+    return <ComputerInvocation part={part} isLatestMessage={props.isLatestMessage} status={props.status} />;
+  }
+
+  if (toolName === "bash" || (!toolName && part.toolInvocation.args?.command)) {
+    return <BashInvocation part={part} isLatestMessage={props.isLatestMessage} status={props.status} />;
+  }
+
+  return <GenericInvocation part={part} isLatestMessage={props.isLatestMessage} status={props.status} />;
+}
+
+export function PreviewMessage(props: PreviewMessageProps) {
+  const { message } = props;
+
+  return (
+    <div className="group/message w-full px-4" data-role={message.role}>
+      <div
+        className={cn(
+          "flex w-full gap-4",
+          message.role === "user"
+            ? "ml-auto max-w-2xl"
+            : "",
+        )}
+      >
+        <div className="flex w-full flex-col gap-4">
+          {message.content ? (
+            <div
+              className={cn(
+                "flex w-full flex-row gap-2",
+                message.role === "user" ? "justify-end" : "justify-start",
+              )}
+            >
+              <div
+                className={cn("max-w-prose", {
+                  "rounded-xl bg-secondary px-3 py-2 text-secondary-foreground": message.role === "user",
+                })}
+              >
+                <Markdown>{message.content}</Markdown>
+              </div>
+            </div>
+          ) : null}
+
+          {message.parts?.map((part, index) => {
+            if (part.type === "text") {
+              return (
+                <div key={`${message.id}-text-${index}`} className="max-w-prose">
+                  <Markdown>{part.text}</Markdown>
+                </div>
+              );
+            }
+
+            if (part.type === "tool-invocation") {
+              return (
+                <div key={`${message.id}-tool-${part.toolInvocation.toolCallId}-${index}`}>
+                  {renderToolInvocation(part, props)}
+                </div>
+              );
+            }
+
+            return null;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
